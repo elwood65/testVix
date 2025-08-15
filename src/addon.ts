@@ -143,6 +143,10 @@ const baseManifest: Manifest = {
                         "Baseball",
                         "NFL"
                     ]
+                },
+                {
+                    name: "search",
+                    isRequired: false
                 }
             ]
         }
@@ -810,6 +814,63 @@ function createBuilder(initialConfig: AddonConfig = {}) {
             }
             let filteredChannels = tvChannels;
             let requestedSlug: string | null = null;
+
+            // === SEARCH HANDLER ===
+            if (extra && typeof extra.search === 'string' && extra.search.trim().length > 0) {
+                const rawQ = extra.search.trim();
+                const tokens = rawQ.toLowerCase().split(/\s+/).filter(Boolean);
+                console.log(`🔎 Search (OR+fuzzy) query tokens:`, tokens);
+                const seen = new Set<string>();
+
+                const simpleLevenshtein = (a: string, b: string): number => {
+                    if (a === b) return 0;
+                    const al = a.length, bl = b.length;
+                    if (Math.abs(al - bl) > 1) return 99; // prune (we only care distance 0/1)
+                    const dp: number[] = Array(bl + 1).fill(0);
+                    for (let j = 0; j <= bl; j++) dp[j] = j;
+                    for (let i = 1; i <= al; i++) {
+                        let prev = dp[0];
+                        dp[0] = i;
+                        for (let j = 1; j <= bl; j++) {
+                            const tmp = dp[j];
+                            if (a[i - 1] === b[j - 1]) dp[j] = prev; else dp[j] = Math.min(prev + 1, dp[j] + 1, dp[j - 1] + 1);
+                            prev = tmp;
+                        }
+                    }
+                    return dp[bl];
+                };
+
+                const tokenMatches = (token: string, hay: string, words: string[]): boolean => {
+                    if (!token) return false;
+                    if (hay.includes(token)) return true; // substring
+                    // prefix match on any word
+                    if (words.some(w => w.startsWith(token))) return true;
+                    // fuzzy distance 1 on words (only if token length > 3 to avoid noise)
+                    if (token.length > 3) {
+                        for (const w of words) {
+                            if (Math.abs(w.length - token.length) > 1) continue;
+                            if (simpleLevenshtein(token, w) <= 1) return true;
+                        }
+                    }
+                    return false;
+                };
+
+                filteredChannels = tvChannels.filter((c: any) => {
+                    const categories = getChannelCategories(c); // include category slugs
+                    const categoryStr = categories.join(' ');
+                    const hayRaw = `${c.name || ''} ${(c.description || '')} ${categoryStr}`.toLowerCase();
+                    const words = hayRaw.split(/[^a-z0-9]+/).filter(Boolean);
+                    const ok = tokens.some((t: string) => tokenMatches(t, hayRaw, words)); // OR logic
+                    if (ok) {
+                        if (seen.has(c.id)) return false;
+                        seen.add(c.id);
+                        return true;
+                    }
+                    return false;
+                }).slice(0, 200);
+                console.log(`🔎 Search results (OR+fuzzy): ${filteredChannels.length}`);
+            } else {
+                // === GENRE FILTERING ===
             
             // Filtra per genere se specificato
             if (extra && extra.genre) {
@@ -859,6 +920,7 @@ function createBuilder(initialConfig: AddonConfig = {}) {
             } else {
                 console.log(`📺 No genre filter, showing all ${tvChannels.length} channels`);
             }
+            }
 
             // Se filtro richiesto e nessun canale trovato -> aggiungi placeholder
             if (requestedSlug && filteredChannels.length === 0) {
@@ -872,7 +934,7 @@ function createBuilder(initialConfig: AddonConfig = {}) {
                     poster: placeholderLogo,
                     type: 'tv',
                     category: [requestedSlug],
-                    description: 'Nessuno Stream disponibile oggi. StreamViX',
+                    description: 'Nessuno Stream disponibile oggi. Live 🔴',
                     _placeholder: true,
                     placeholderVideo: `${PLACEHOLDER_LOGO_BASE}/nostream.mp4`
                 }];
@@ -1030,7 +1092,7 @@ function createBuilder(initialConfig: AddonConfig = {}) {
                         poster: placeholderLogo,
                         logo: placeholderLogo,
                         background: placeholderLogo,
-                        description: 'Nessuno Stream disponibile oggi. StreamViX',
+                        description: 'Nessuno Stream disponibile oggi. Live 🔴',
                         genre: [slug],
                         genres: [slug],
                         year: new Date().getFullYear().toString(),
@@ -1517,7 +1579,7 @@ function createBuilder(initialConfig: AddonConfig = {}) {
                     // Dopo aver popolato streams (nella logica TV):
                     for (const s of streams) {
                         allStreams.push({
-                            name: 'StreamViX TV',
+                            name: 'Live 🔴',
                             title: s.title,
                             url: s.url
                         });
